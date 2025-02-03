@@ -10,7 +10,6 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Akka.Actor.Internal;
 using Akka.Dispatch;
-using Akka.Tools.MatchHandler;
 
 namespace Akka.Actor
 {
@@ -20,10 +19,33 @@ namespace Akka.Actor
     public abstract class ReceiveActor : UntypedActor, IInitializableActor
     {
         private bool _shouldUnhandle = true;
-        private readonly Stack<MatchBuilder> _matchHandlerBuilders = new();
-        private PartialAction<object> _partialReceive = _ => false;
+        private readonly Stack<Bob> _handlersStack = new();
+        private Bob _currentHandlers = null;
         private bool _hasBeenInitialized;
 
+        
+        public class Bob
+        {
+            public Bob()
+            {
+                Handlers = new Dictionary<Type, List<SubItems>>();
+                HandleAny = null;
+                HandleObject = new List<SubItems>();
+            }
+
+            public Dictionary<Type, List<SubItems>> Handlers { get; set; }
+
+            public List<SubItems> HandleObject { get; set; }
+            
+            public Action<object> HandleAny { get; set; }
+        }
+
+        public class SubItems
+        {
+            public Predicate<object> Predicate { get; set; }
+            public Func<object, bool> Handler { get; set; }
+        }
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -38,20 +60,14 @@ namespace Akka.Actor
             //during recreate. Make sure what happens here is idempotent
             if(!_hasBeenInitialized)	//Do not perform this when "recreating" the same instance
             {
-                _partialReceive = BuildNewReceiveHandler(_matchHandlerBuilders.Pop());
+                _currentHandlers = _handlersStack.Pop();
                 _hasBeenInitialized = true;
             }
         }
 
-        private PartialAction<object> BuildNewReceiveHandler(MatchBuilder matchBuilder)
-        {
-            return matchBuilder.Build();
-        }
-
-
         private void EnsureMayConfigureMessageHandlers()
         {
-            if(_matchHandlerBuilders.Count <= 0) throw new InvalidOperationException("You may only call Receive-methods when constructing the actor and inside Become().");
+            if(_handlersStack.Count <= 0) throw new InvalidOperationException("You may only call Receive-methods when constructing the actor and inside Become().");
         }
 
         /// <summary>
@@ -59,7 +75,7 @@ namespace Akka.Actor
         /// </summary>
         private void PrepareConfigureMessageHandlers()
         {
-            _matchHandlerBuilders.Push(new MatchBuilder(CachedMatchCompiler<object>.Instance));
+            _handlersStack.Push(new Bob());
         }
 
         /// <summary>
@@ -70,14 +86,54 @@ namespace Akka.Actor
         {
             //Seal the method so that implementors cannot use it. They should only use Receive and Become
 
-            ExecutePartialMessageHandler(message, _partialReceive);
+            ExecuteMessageHandler(message, _currentHandlers);
         }
 
-        private void ExecutePartialMessageHandler(object message, PartialAction<object> partialAction)
+        private void ExecuteMessageHandler(object message, Bob handlers)
         {
-            var wasHandled = partialAction(message);
-            if(!wasHandled && _shouldUnhandle)
+            var messageType = message.GetType();
+            var currentHandler = handlers;
+            if (currentHandler.Handlers.TryGetValue(messageType, out var handler))
+            {
+                foreach (var subItem in handler)
+                {
+                    if (subItem.Predicate == null || subItem.Predicate(message))
+                    {
+                        var handled = subItem.Handler(message);
+
+                        if (handled)
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if (currentHandler.HandleObject.Count > 0)
+            {
+                foreach (var subItem in currentHandler.HandleObject)
+                {
+                    if (subItem.Predicate == null || subItem.Predicate(message))
+                    {
+                        var handled = subItem.Handler(message);
+
+                        if (handled)
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if (currentHandler.HandleAny != null)
+            {
+                currentHandler.HandleAny(message);
+            }
+
+            if (_shouldUnhandle)
+            {
                 Unhandled(message);
+            }
         }
 
         /// <summary>
@@ -86,8 +142,8 @@ namespace Akka.Actor
         /// <param name="configure">Configures the new handler by calling the different Receive overloads.</param>
         protected void Become(Action configure)
         {
-            var newHandler = CreateNewHandler(configure);
-            base.Become(m => ExecutePartialMessageHandler(m, newHandler));
+            var newHandlers = CreateNewHandlers(configure);
+            base.Become(m => ExecuteMessageHandler(m, newHandlers));
         }
 
         /// <summary>
@@ -99,16 +155,15 @@ namespace Akka.Actor
         /// <param name="configure">Configures the new handler by calling the different Receive overloads.</param>
         protected void BecomeStacked(Action configure)
         {
-            var newHandler = CreateNewHandler(configure);
-            base.BecomeStacked(m => ExecutePartialMessageHandler(m, newHandler));
+            var newHandlers = CreateNewHandlers(configure);
+            base.BecomeStacked(m => ExecuteMessageHandler(m, newHandlers));
         }
 
-        private PartialAction<object> CreateNewHandler(Action configure)
+        private Bob CreateNewHandlers(Action configure)
         {
             PrepareConfigureMessageHandlers();
             configure();
-            var newHandler = BuildNewReceiveHandler(_matchHandlerBuilders.Pop());
-            return newHandler;
+            return _handlersStack.Pop();
         }
 
         private static Action<T> WrapAsyncHandler<T>(Func<T, Task> asyncHandler)
@@ -197,6 +252,9 @@ namespace Akka.Actor
             ReceiveAny(WrapAsyncHandler(handler));
         }
 
+
+        
+
         /// <summary>
         /// Registers a handler for incoming messages of the specified type <typeparamref name="T"/>.
         /// If <paramref name="shouldHandle"/>!=<c>null</c> then it must return true before a message is passed to <paramref name="handler"/>.
@@ -211,7 +269,50 @@ namespace Akka.Actor
         protected void Receive<T>(Action<T> handler, Predicate<T> shouldHandle = null)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().Match(handler, shouldHandle);
+            var handlers = _handlersStack.Peek();
+
+            if (typeof(T) == typeof(object))
+            {
+                handlers.HandleObject.Add(new SubItems
+                {
+                    Predicate = shouldHandle == null ? null : o => shouldHandle((T)o), 
+                    Handler = o =>
+                    {
+                        handler((T)o);
+                        return true;
+                    }
+                });
+            }
+
+            if (handlers.Handlers.TryGetValue(typeof(T), out var subItems))
+            {
+                subItems.Add(new SubItems
+                {
+                    Predicate = shouldHandle == null ? null : o => shouldHandle((T)o), 
+                    Handler = o =>
+                    {
+                        handler((T)o);
+                        return true;
+                    }
+                });
+            }
+            else
+            {
+                handlers.Handlers[typeof(T)] = new List<SubItems>
+                {
+                    new SubItems
+                    {
+                        Predicate = shouldHandle == null ? null : o => shouldHandle((T)o), 
+                        Handler = o =>
+                        {
+                            handler((T)o);
+                            return true;
+                        }
+                    }
+                };
+            }
+            
+            
         }
 
         /// <summary>
@@ -244,7 +345,48 @@ namespace Akka.Actor
         protected void Receive(Type messageType, Action<object> handler, Predicate<object> shouldHandle = null)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().Match(messageType, handler, shouldHandle);
+            var handlers = _handlersStack.Peek();
+
+            if (messageType == typeof(object))
+            {
+                handlers.HandleObject.Add(new SubItems()
+                {
+                    Predicate = shouldHandle,
+                    Handler = o =>
+                    {
+                        handler(o);
+                        return true;
+                    }
+                });
+            }
+
+            if (handlers.Handlers.TryGetValue(messageType, out var subItems))
+            {
+                subItems.Add(new SubItems
+                {
+                    Predicate = shouldHandle, 
+                    Handler = o =>
+                    {
+                        handler(o);
+                        return true;
+                    }
+                });
+            }
+            else
+            {
+                handlers.Handlers[messageType] = new List<SubItems>
+                {
+                    new SubItems
+                    {
+                        Predicate = shouldHandle, 
+                        Handler = o =>
+                        {
+                            handler(o);
+                            return true;
+                        }
+                    }
+                };
+            }
         }
 
         /// <summary>
@@ -279,7 +421,40 @@ namespace Akka.Actor
         protected void Receive<T>(Func<T, bool> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().Match(handler);
+            var handlers = _handlersStack.Peek();
+
+            if (typeof(T) == typeof(object))
+            {
+                handlers.HandleObject.Add(new SubItems
+                {
+                    Predicate = null, 
+                    Handler = o =>
+                    {
+                        handler((T)o);
+                        return true;
+                    }
+                });
+            }
+
+            if (handlers.Handlers.TryGetValue(typeof(T), out var subItems))
+            {
+                subItems.Add(new SubItems
+                {
+                    Predicate = null, 
+                    Handler = o => handler((T)o)
+                });
+            }
+            else
+            {
+                handlers.Handlers[typeof(T)] = new List<SubItems>
+                {
+                    new SubItems
+                    {
+                        Predicate = null, 
+                        Handler = o => handler((T)o)
+                    }
+                };
+            }
         }
 
         /// <summary>
@@ -298,7 +473,37 @@ namespace Akka.Actor
         protected void Receive(Type messageType, Func<object, bool> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().Match(messageType, handler);
+            var handlers = _handlersStack.Peek();
+
+            if (messageType == typeof(object))
+            {
+                handlers.HandleObject.Add(new SubItems
+                {
+                    Predicate = null, 
+                    Handler = handler
+                });
+            }
+            
+            if (handlers.Handlers.TryGetValue(messageType, out var subItems))
+            {
+                subItems.Add(new SubItems
+                {
+                    Predicate = null, 
+                    Handler = handler
+                });
+            }
+            else
+            {
+                handlers.Handlers[messageType] = new List<SubItems>
+                {
+                    new SubItems
+                    {
+                        Predicate = null, 
+                        Handler = handler
+                    }
+                };
+            }
+            
         }
 
         /// <summary>
@@ -312,7 +517,8 @@ namespace Akka.Actor
         protected void ReceiveAny(Action<object> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().MatchAny(handler);
+            var handlers = _handlersStack.Peek();
+            handlers.HandleAny = handler;
         }
     }
 }
