@@ -1,4 +1,4 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="ReceiveActor.cs" company="Akka.NET Project">
 //     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
 //     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
@@ -19,28 +19,28 @@ namespace Akka.Actor
     public abstract class ReceiveActor : UntypedActor, IInitializableActor
     {
         private bool _shouldUnhandle = true;
-        private readonly Stack<Bob> _handlersStack = new();
-        private Bob _currentHandlers = null;
+        private readonly Stack<HandlerSet> _handlersStack = new();
+        private HandlerSet _currentHandlers = null;
         private bool _hasBeenInitialized;
 
         
-        public class Bob
+        public class HandlerSet
         {
-            public Bob()
+            public HandlerSet()
             {
-                Handlers = new Dictionary<Type, List<SubItems>>();
+                Handlers = new Dictionary<Type, List<TypeHandler>>();
                 HandleAny = null;
-                HandleObject = new List<SubItems>();
+                HandleObject = new List<TypeHandler>();
             }
 
-            public Dictionary<Type, List<SubItems>> Handlers { get; set; }
+            public Dictionary<Type, List<TypeHandler>> Handlers { get; set; }
 
-            public List<SubItems> HandleObject { get; set; }
+            public List<TypeHandler> HandleObject { get; set; }
             
             public Action<object> HandleAny { get; set; }
         }
 
-        public class SubItems
+        public class TypeHandler
         {
             public Predicate<object> Predicate { get; set; }
             public Func<object, bool> Handler { get; set; }
@@ -75,7 +75,7 @@ namespace Akka.Actor
         /// </summary>
         private void PrepareConfigureMessageHandlers()
         {
-            _handlersStack.Push(new Bob());
+            _handlersStack.Push(new HandlerSet());
         }
 
         /// <summary>
@@ -89,7 +89,7 @@ namespace Akka.Actor
             ExecuteMessageHandler(message, _currentHandlers);
         }
 
-        private void ExecuteMessageHandler(object message, Bob handlers)
+        private void ExecuteMessageHandler(object message, HandlerSet handlers)
         {
             var messageType = message.GetType();
             var currentHandler = handlers;
@@ -159,7 +159,7 @@ namespace Akka.Actor
             base.BecomeStacked(m => ExecuteMessageHandler(m, newHandlers));
         }
 
-        private Bob CreateNewHandlers(Action configure)
+        private HandlerSet CreateNewHandlers(Action configure)
         {
             PrepareConfigureMessageHandlers();
             configure();
@@ -252,9 +252,6 @@ namespace Akka.Actor
             ReceiveAny(WrapAsyncHandler(handler));
         }
 
-
-        
-
         /// <summary>
         /// Registers a handler for incoming messages of the specified type <typeparamref name="T"/>.
         /// If <paramref name="shouldHandle"/>!=<c>null</c> then it must return true before a message is passed to <paramref name="handler"/>.
@@ -268,51 +265,12 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive<T>(Action<T> handler, Predicate<T> shouldHandle = null)
         {
-            EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
-
-            if (typeof(T) == typeof(object))
-            {
-                handlers.HandleObject.Add(new SubItems
-                {
-                    Predicate = shouldHandle == null ? null : o => shouldHandle((T)o), 
-                    Handler = o =>
-                    {
-                        handler((T)o);
-                        return true;
-                    }
-                });
-            }
-
-            if (handlers.Handlers.TryGetValue(typeof(T), out var subItems))
-            {
-                subItems.Add(new SubItems
-                {
-                    Predicate = shouldHandle == null ? null : o => shouldHandle((T)o), 
-                    Handler = o =>
-                    {
-                        handler((T)o);
-                        return true;
-                    }
-                });
-            }
-            else
-            {
-                handlers.Handlers[typeof(T)] = new List<SubItems>
-                {
-                    new SubItems
-                    {
-                        Predicate = shouldHandle == null ? null : o => shouldHandle((T)o), 
-                        Handler = o =>
-                        {
-                            handler((T)o);
-                            return true;
-                        }
-                    }
-                };
-            }
             
-            
+            Receive(typeof(T), o =>
+            {
+                handler((T)o);
+                return true;
+            }, shouldHandle == null ? (Predicate<object>)null : o => shouldHandle((T)o));
         }
 
         /// <summary>
@@ -344,49 +302,11 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive(Type messageType, Action<object> handler, Predicate<object> shouldHandle = null)
         {
-            EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
-
-            if (messageType == typeof(object))
+            Receive(messageType, o =>
             {
-                handlers.HandleObject.Add(new SubItems()
-                {
-                    Predicate = shouldHandle,
-                    Handler = o =>
-                    {
-                        handler(o);
-                        return true;
-                    }
-                });
-            }
-
-            if (handlers.Handlers.TryGetValue(messageType, out var subItems))
-            {
-                subItems.Add(new SubItems
-                {
-                    Predicate = shouldHandle, 
-                    Handler = o =>
-                    {
-                        handler(o);
-                        return true;
-                    }
-                });
-            }
-            else
-            {
-                handlers.Handlers[messageType] = new List<SubItems>
-                {
-                    new SubItems
-                    {
-                        Predicate = shouldHandle, 
-                        Handler = o =>
-                        {
-                            handler(o);
-                            return true;
-                        }
-                    }
-                };
-            }
+                handler(o);
+                return true;
+            }, shouldHandle);
         }
 
         /// <summary>
@@ -402,7 +322,11 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive(Type messageType, Predicate<object> shouldHandle, Action<object> handler)
         {
-            Receive(messageType, handler, shouldHandle);
+            Receive(messageType, o =>
+            {
+                handler(o);
+                return true;
+            }, shouldHandle);
         }
 
         /// <summary>
@@ -420,41 +344,8 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive<T>(Func<T, bool> handler)
         {
-            EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
-
-            if (typeof(T) == typeof(object))
-            {
-                handlers.HandleObject.Add(new SubItems
-                {
-                    Predicate = null, 
-                    Handler = o =>
-                    {
-                        handler((T)o);
-                        return true;
-                    }
-                });
-            }
-
-            if (handlers.Handlers.TryGetValue(typeof(T), out var subItems))
-            {
-                subItems.Add(new SubItems
-                {
-                    Predicate = null, 
-                    Handler = o => handler((T)o)
-                });
-            }
-            else
-            {
-                handlers.Handlers[typeof(T)] = new List<SubItems>
-                {
-                    new SubItems
-                    {
-                        Predicate = null, 
-                        Handler = o => handler((T)o)
-                    }
-                };
-            }
+            
+            Receive(typeof(T), o => handler((T)o), null);
         }
 
         /// <summary>
@@ -472,38 +363,32 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive(Type messageType, Func<object, bool> handler)
         {
+            Receive(messageType, handler, null);
+        }
+        
+        protected void Receive(Type messageType, Func<object, bool> handler, Predicate<object> shouldHandle)
+        {
             EnsureMayConfigureMessageHandlers();
             var handlers = _handlersStack.Peek();
+            var subHandler = new TypeHandler
+            {
+                Predicate = shouldHandle,
+                Handler = handler
+            };
 
             if (messageType == typeof(object))
             {
-                handlers.HandleObject.Add(new SubItems
-                {
-                    Predicate = null, 
-                    Handler = handler
-                });
-            }
-            
-            if (handlers.Handlers.TryGetValue(messageType, out var subItems))
-            {
-                subItems.Add(new SubItems
-                {
-                    Predicate = null, 
-                    Handler = handler
-                });
+                handlers.HandleObject.Add(subHandler);
             }
             else
             {
-                handlers.Handlers[messageType] = new List<SubItems>
+                if (!handlers.Handlers.TryGetValue(messageType, out var handlerList))
                 {
-                    new SubItems
-                    {
-                        Predicate = null, 
-                        Handler = handler
-                    }
-                };
+                    handlerList = new List<TypeHandler>();
+                    handlers.Handlers[messageType] = handlerList;
+                }
+                handlerList.Add(subHandler);
             }
-            
         }
 
         /// <summary>
