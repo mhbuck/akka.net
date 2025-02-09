@@ -24,30 +24,33 @@ namespace Akka.Actor
         private HandlerSet _currentHandlers = null;
         private bool _hasBeenInitialized;
 
-        
-        public class HandlerSet
+
+        // Internal classes to do the handling. If this approach is used then these can be
+        // Moved out and better tested
+        class HandlerSet
         {
             public HandlerSet()
             {
-                Handlers = new Dictionary<Type, List<ITypeHandler>>();
+                TypedHandlers = new Dictionary<Type, List<ITypeHandler>>();
                 HandleAny = null;
                 HandleObject = new List<ITypeHandler>();
             }
 
-            public Dictionary<Type, List<ITypeHandler>> Handlers { get; set; }
+            public Dictionary<Type, List<ITypeHandler>> TypedHandlers { get; set; }
 
             public List<ITypeHandler> HandleObject { get; set; }
             
             public Action<object> HandleAny { get; set; }
         }
 
-        public interface ITypeHandler
+        interface ITypeHandler
         {
             bool ShouldHandle(object message);
             bool Handle(object message);
         }
 
-        public class TypeHandler<T> : ITypeHandler
+        // Attempting to make more use of generics to avoid boxing
+        class TypeHandler<T> : ITypeHandler
         {
             public Predicate<T> Predicate { get; set; }
             public Func<T, bool> Handler { get; set; }
@@ -109,7 +112,7 @@ namespace Akka.Actor
         {
             var messageType = message.GetType();
             var currentHandler = handlers;
-            if (currentHandler.Handlers.TryGetValue(messageType, out var handler))
+            if (currentHandler.TypedHandlers.TryGetValue(messageType, out var handler))
             {
                 foreach (var subItem in handler)
                 {
@@ -125,6 +128,8 @@ namespace Akka.Actor
                 }
             }
 
+            // Fall back if the type that was passed in the Receive methods is an object the tests were failing due to
+            // missing the handler because it was of type object. This works but as it stands possibly not the best approach
             if (currentHandler.HandleObject.Count > 0)
             {
                 foreach (var subItem in currentHandler.HandleObject)
@@ -415,6 +420,8 @@ namespace Akka.Actor
             handlers.HandleAny = handler;
         }
         
+        // Separated the handling of the generic and typed handlers because the generics it can be handled
+        // one way but using types needed to assume object types.
         private void AddGenericReceiveHandler<T>(Predicate<T> shouldHandle, Func<T, bool> handler)
         {
             EnsureMayConfigureMessageHandlers();
@@ -433,10 +440,10 @@ namespace Akka.Actor
                 });
             }
             
-            if (!handlers.Handlers.TryGetValue(typeof(T), out var handlerList))
+            if (!handlers.TypedHandlers.TryGetValue(typeof(T), out var handlerList))
             {
                 handlerList = new List<ITypeHandler>();
-                handlers.Handlers[typeof(T)] = handlerList;
+                handlers.TypedHandlers[typeof(T)] = handlerList;
             }
 
             var typeHandler = new TypeHandler<T>
@@ -468,10 +475,10 @@ namespace Akka.Actor
                 });
             }
 
-            if (!handlers.Handlers.TryGetValue(messageType, out var handlerList))
+            if (!handlers.TypedHandlers.TryGetValue(messageType, out var handlerList))
             {
                 handlerList = new List<ITypeHandler>();
-                handlers.Handlers[messageType] = handlerList;
+                handlers.TypedHandlers[messageType] = handlerList;
             }
 
             // Have to use object here as dont have the generic type information
