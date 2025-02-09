@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Akka.Actor.Internal;
 using Akka.Dispatch;
+using Akka.Tools.MatchHandler;
 
 namespace Akka.Actor
 {
@@ -28,22 +29,37 @@ namespace Akka.Actor
         {
             public HandlerSet()
             {
-                Handlers = new Dictionary<Type, List<TypeHandler>>();
+                Handlers = new Dictionary<Type, List<ITypeHandler>>();
                 HandleAny = null;
-                HandleObject = new List<TypeHandler>();
+                HandleObject = new List<ITypeHandler>();
             }
 
-            public Dictionary<Type, List<TypeHandler>> Handlers { get; set; }
+            public Dictionary<Type, List<ITypeHandler>> Handlers { get; set; }
 
-            public List<TypeHandler> HandleObject { get; set; }
+            public List<ITypeHandler> HandleObject { get; set; }
             
             public Action<object> HandleAny { get; set; }
         }
 
-        public class TypeHandler
+        public interface ITypeHandler
         {
-            public Predicate<object> Predicate { get; set; }
-            public Func<object, bool> Handler { get; set; }
+            bool ShouldHandle(object message);
+            bool Handle(object message);
+        }
+
+        public class TypeHandler<T> : ITypeHandler
+        {
+            public Predicate<T> Predicate { get; set; }
+            public Func<T, bool> Handler { get; set; }
+            public bool ShouldHandle(object message)
+            {
+                return Predicate == null || Predicate((T)message);
+            }
+
+            public bool Handle(object message)
+            {
+                return Handler((T)message);
+            }
         }
         
         /// <summary>
@@ -97,9 +113,9 @@ namespace Akka.Actor
             {
                 foreach (var subItem in handler)
                 {
-                    if (subItem.Predicate == null || subItem.Predicate(message))
+                    if (subItem.ShouldHandle(message))
                     {
-                        var handled = subItem.Handler(message);
+                        var handled = subItem.Handle(message);
 
                         if (handled)
                         {
@@ -113,9 +129,9 @@ namespace Akka.Actor
             {
                 foreach (var subItem in currentHandler.HandleObject)
                 {
-                    if (subItem.Predicate == null || subItem.Predicate(message))
+                    if (subItem.ShouldHandle(message))
                     {
-                        var handled = subItem.Handler(message);
+                        var handled = subItem.Handle(message);
 
                         if (handled)
                         {
@@ -188,7 +204,11 @@ namespace Akka.Actor
         /// <param name="shouldHandle">When not <c>null</c> it is used to determine if the message matches.</param>
         protected void ReceiveAsync<T>(Func<T,Task> handler, Predicate<T> shouldHandle = null)
         {
-            Receive(WrapAsyncHandler(handler), shouldHandle);
+            AddGenericReceiveHandler<T>(shouldHandle, message =>
+            {
+                WrapAsyncHandler(handler)(message);
+                return true;
+            });
         }
 
         /// <summary>
@@ -204,7 +224,11 @@ namespace Akka.Actor
         /// <param name="handler">The message handler that is invoked for incoming messages of the specified type <typeparamref name="T"/></param>
         protected void ReceiveAsync<T>(Predicate<T> shouldHandle, Func<T, Task> handler)
         {
-            Receive(WrapAsyncHandler(handler), shouldHandle);
+            AddGenericReceiveHandler<T>(shouldHandle, message =>
+            {
+                WrapAsyncHandler(handler)(message);
+                return true;
+            });
         }
 
         /// <summary>
@@ -220,7 +244,11 @@ namespace Akka.Actor
         /// <param name="shouldHandle">When not <c>null</c> it is used to determine if the message matches.</param>
         protected void ReceiveAsync(Type messageType, Func<object, Task> handler, Predicate<object> shouldHandle = null)
         {
-            Receive(messageType, WrapAsyncHandler(handler), shouldHandle);
+            AddTypedReceiveHandler(messageType, shouldHandle, message =>
+            {
+                WrapAsyncHandler(handler)(message);
+                return true;
+            });
         }
 
         /// <summary>
@@ -236,7 +264,11 @@ namespace Akka.Actor
         /// <param name="handler">The message handler that is invoked for incoming messages of the specified <paramref name="messageType"/></param>
         protected void ReceiveAsync(Type messageType, Predicate<object> shouldHandle, Func<object, Task> handler)
         {
-            Receive(messageType, WrapAsyncHandler(handler), shouldHandle);
+            AddTypedReceiveHandler(messageType, shouldHandle, message =>
+            {
+                WrapAsyncHandler(handler)(message);
+                return true;
+            });
         }
 
         /// <summary>
@@ -265,12 +297,11 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive<T>(Action<T> handler, Predicate<T> shouldHandle = null)
         {
-            
-            Receive(typeof(T), o =>
+            AddGenericReceiveHandler<T>(shouldHandle, message =>
             {
-                handler((T)o);
+                handler(message);
                 return true;
-            }, shouldHandle == null ? (Predicate<object>)null : o => shouldHandle((T)o));
+            });
         }
 
         /// <summary>
@@ -286,7 +317,11 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive<T>(Predicate<T> shouldHandle, Action<T> handler)
         {
-            Receive(handler, shouldHandle);
+            AddGenericReceiveHandler<T>(shouldHandle, message =>
+            {
+                handler(message);
+                return true;
+            });
         }
 
         /// <summary>
@@ -302,11 +337,11 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive(Type messageType, Action<object> handler, Predicate<object> shouldHandle = null)
         {
-            Receive(messageType, o =>
+            AddTypedReceiveHandler(messageType, shouldHandle, message =>
             {
-                handler(o);
+                handler(message);
                 return true;
-            }, shouldHandle);
+            });
         }
 
         /// <summary>
@@ -322,11 +357,11 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive(Type messageType, Predicate<object> shouldHandle, Action<object> handler)
         {
-            Receive(messageType, o =>
+            AddTypedReceiveHandler(messageType, shouldHandle, message =>
             {
-                handler(o);
+                handler(message);
                 return true;
-            }, shouldHandle);
+            });
         }
 
         /// <summary>
@@ -344,8 +379,7 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive<T>(Func<T, bool> handler)
         {
-            
-            Receive(typeof(T), o => handler((T)o), null);
+            AddGenericReceiveHandler<T>(null, handler);
         }
 
         /// <summary>
@@ -363,32 +397,7 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive(Type messageType, Func<object, bool> handler)
         {
-            Receive(messageType, handler, null);
-        }
-        
-        protected void Receive(Type messageType, Func<object, bool> handler, Predicate<object> shouldHandle)
-        {
-            EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
-            var subHandler = new TypeHandler
-            {
-                Predicate = shouldHandle,
-                Handler = handler
-            };
-
-            if (messageType == typeof(object))
-            {
-                handlers.HandleObject.Add(subHandler);
-            }
-            else
-            {
-                if (!handlers.Handlers.TryGetValue(messageType, out var handlerList))
-                {
-                    handlerList = new List<TypeHandler>();
-                    handlers.Handlers[messageType] = handlerList;
-                }
-                handlerList.Add(subHandler);
-            }
+            AddTypedReceiveHandler(messageType, null, handler);
         }
 
         /// <summary>
@@ -404,6 +413,75 @@ namespace Akka.Actor
             EnsureMayConfigureMessageHandlers();
             var handlers = _handlersStack.Peek();
             handlers.HandleAny = handler;
+        }
+        
+        private void AddGenericReceiveHandler<T>(Predicate<T> shouldHandle, Func<T, bool> handler)
+        {
+            EnsureMayConfigureMessageHandlers();
+            var handlers = _handlersStack.Peek();
+
+            if (typeof(T) == typeof(object))
+            {
+                handlers.HandleObject.Add(new TypeHandler<object>
+                {
+                    Predicate = null, 
+                    Handler = o =>
+                    {
+                        handler((T)o);
+                        return true;
+                    }
+                });
+            }
+            
+            if (!handlers.Handlers.TryGetValue(typeof(T), out var handlerList))
+            {
+                handlerList = new List<ITypeHandler>();
+                handlers.Handlers[typeof(T)] = handlerList;
+            }
+
+            var typeHandler = new TypeHandler<T>
+            {
+                Predicate = shouldHandle,
+                Handler = handler
+            };
+            
+            handlerList.Add(typeHandler);
+        }
+
+        private void AddTypedReceiveHandler(Type messageType, Predicate<object> shouldHandle, Func<object, bool> handler)
+        {
+            EnsureMayConfigureMessageHandlers();
+            var handlers = _handlersStack.Peek();
+
+            // When it comes as an object we need to fall back to the more generic object handler. Would be nice to 
+            // be able to start encouraging users to make use of the generic methods
+            if (messageType == typeof(object))
+            {
+                handlers.HandleObject.Add(new TypeHandler<object>
+                {
+                    Predicate = null, 
+                    Handler = message =>
+                    {
+                        handler(message);
+                        return true;
+                    }
+                });
+            }
+
+            if (!handlers.Handlers.TryGetValue(messageType, out var handlerList))
+            {
+                handlerList = new List<ITypeHandler>();
+                handlers.Handlers[messageType] = handlerList;
+            }
+
+            // Have to use object here as dont have the generic type information
+            var typeHandler = new TypeHandler<object>
+            {
+                Predicate = shouldHandle,
+                Handler = handler
+            };
+            
+            handlerList.Add(typeHandler);
         }
     }
 }
