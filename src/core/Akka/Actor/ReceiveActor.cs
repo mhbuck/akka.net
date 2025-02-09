@@ -10,7 +10,6 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Akka.Actor.Internal;
 using Akka.Dispatch;
-using Akka.Tools.MatchHandler;
 
 namespace Akka.Actor
 {
