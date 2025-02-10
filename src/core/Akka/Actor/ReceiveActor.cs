@@ -416,6 +416,12 @@ namespace Akka.Actor
         {
             EnsureMayConfigureMessageHandlers();
             var handlers = _handlersStack.Peek();
+
+            if (handlers.HandleAny != null)
+            {
+                throw new InvalidOperationException("A handler that catches all messages has been added. No handler can be added after that.");
+            }
+
             handlers.HandleAny = handler;
         }
         
