@@ -154,6 +154,19 @@ namespace Akka.Tests.Actor
             // Then
             Assert.True(terminated);
         }
+        
+        [Fact]
+        public async Task Actor_Can_Handle_Message_When_Base_Is_Defined_In_Receive()
+        {
+            //Given
+            var actor = Sys.ActorOf<ReceiveCanHandleBaseTypesActor>("ReceiveCanHandleBaseTypes");
+
+            //When
+            actor.Tell(new ReceiveCanHandleBaseMessage(), TestActor);
+
+            //Then
+            await ExpectMsgAsync("Handled");
+        }
 
         private class NoReceiveActor : ReceiveActor
         {
@@ -241,7 +254,6 @@ namespace Akka.Tests.Actor
             }
         }
 
-
         private class ReceiveAnyActor : ReceiveActor
         {
             public ReceiveAnyActor()
@@ -268,7 +280,18 @@ namespace Akka.Tests.Actor
                 });
             }
         }
-        
+
+        private class ReceiveCanHandleBaseTypesActor : ReceiveActor
+        {
+            public ReceiveCanHandleBaseTypesActor()
+            {
+                Receive<IReceiveCanHandleBaseMessage>(i => Sender.Tell("Handled", Self));
+            }
+        }
+
+        private record ReceiveCanHandleBaseMessage : IReceiveCanHandleBaseMessage { }
+
+        private interface IReceiveCanHandleBaseMessage { }
     }
 }
 

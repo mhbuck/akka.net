@@ -111,17 +111,20 @@ namespace Akka.Actor
         {
             var messageType = message.GetType();
             var currentHandler = handlers;
-            if (currentHandler.TypedHandlers.TryGetValue(messageType, out var handler))
+            foreach (var (type, typedHandlers) in handlers.TypedHandlers)
             {
-                foreach (var subItem in handler)
+                if (type.IsAssignableFrom(messageType))
                 {
-                    if (subItem.ShouldHandle(message))
+                    foreach (var subItem in typedHandlers)
                     {
-                        var handled = subItem.Handle(message);
-
-                        if (handled)
+                        if (subItem.ShouldHandle(message))
                         {
-                            return;
+                            var handled = subItem.Handle(message);
+
+                            if (handled)
+                            {
+                                return;
+                            }
                         }
                     }
                 }
