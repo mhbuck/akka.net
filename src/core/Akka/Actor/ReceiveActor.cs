@@ -35,17 +35,18 @@ namespace Akka.Actor
                 HandleObject = new List<ITypeHandler>();
             }
 
-            public Dictionary<Type, List<ITypeHandler>> TypedHandlers { get; set; }
+            public Dictionary<Type, List<ITypeHandler>> TypedHandlers { get; }
 
-            public List<ITypeHandler> HandleObject { get; set; }
+            public List<ITypeHandler> HandleObject { get; }
             
             public Action<object> HandleAny { get; set; }
+            
+            
         }
 
         interface ITypeHandler
         {
-            bool ShouldHandle(object message);
-            bool Handle(object message);
+            bool TryHandle(object message);
         }
 
         // Attempting to make more use of generics to avoid boxing
@@ -53,14 +54,16 @@ namespace Akka.Actor
         {
             public Predicate<T> Predicate { get; set; }
             public Func<T, bool> Handler { get; set; }
-            public bool ShouldHandle(object message)
-            {
-                return Predicate == null || Predicate((T)message);
-            }
 
-            public bool Handle(object message)
+            public bool TryHandle(object message)
             {
-                return Handler((T)message);
+                var typedMessage = (T)message;
+                if (Predicate == null || Predicate(typedMessage))
+                {
+                    return Handler(typedMessage);
+                }
+
+                return false;
             }
         }
         
@@ -117,14 +120,9 @@ namespace Akka.Actor
                 {
                     foreach (var subItem in typedHandlers)
                     {
-                        if (subItem.ShouldHandle(message))
+                        if (subItem.TryHandle(message))
                         {
-                            var handled = subItem.Handle(message);
-
-                            if (handled)
-                            {
-                                return;
-                            }
+                            return;
                         }
                     }
                 }
@@ -136,14 +134,9 @@ namespace Akka.Actor
             {
                 foreach (var subItem in currentHandler.HandleObject)
                 {
-                    if (subItem.ShouldHandle(message))
+                    if (subItem.TryHandle(message))
                     {
-                        var handled = subItem.Handle(message);
-
-                        if (handled)
-                        {
-                            return;
-                        }
+                        return;
                     }
                 }
             }
@@ -151,6 +144,7 @@ namespace Akka.Actor
             if (currentHandler.HandleAny != null)
             {
                 currentHandler.HandleAny(message);
+                return;
             }
 
             if (_shouldUnhandle)
