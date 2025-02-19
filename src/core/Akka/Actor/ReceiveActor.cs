@@ -30,34 +30,58 @@ namespace Akka.Actor
         {
             public HandlerSet()
             {
-                TypedHandlers = new Dictionary<Type, List<ITypeHandler>>();
+                TypedHandlers = new Dictionary<Type, ITypeHandler>();
                 HandleAny = null;
-                HandleObject = new List<ITypeHandler>();
             }
 
-            public Dictionary<Type, List<ITypeHandler>> TypedHandlers { get; }
+            public Dictionary<Type, ITypeHandler> TypedHandlers { get; }
 
-            public List<ITypeHandler> HandleObject { get; }
-            
             public Action<object> HandleAny { get; set; }
-            
-            
         }
+
 
         interface ITypeHandler
         {
+            Type HandlesType { get; }
+
             bool TryHandle(object message);
         }
 
         // Attempting to make more use of generics to avoid boxing
         class TypeHandler<T> : ITypeHandler
         {
-            public Predicate<T> Predicate { get; set; }
-            public Func<T, bool> Handler { get; set; }
+            public TypeHandler()
+            {
+                HandlesType = typeof(T);
+                Handlers = new List<PredicateHandler<T>>();
+            }
+
+            public Type HandlesType { get; }
+
+            public List<PredicateHandler<T>> Handlers { get;}
 
             public bool TryHandle(object message)
             {
                 var typedMessage = (T)message;
+                foreach (var predicateHandler in Handlers)
+                {
+                    if (predicateHandler.TryHandle(typedMessage))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        class PredicateHandler<T>
+        {
+            public Predicate<T> Predicate { get; init; }
+            public Func<T, bool> Handler { get; init; }
+            
+            public bool TryHandle(T typedMessage)
+            {
                 if (Predicate == null || Predicate(typedMessage))
                 {
                     return Handler(typedMessage);
@@ -66,7 +90,8 @@ namespace Akka.Actor
                 return false;
             }
         }
-        
+
+
         /// <summary>
         /// TBD
         /// </summary>
@@ -116,25 +141,11 @@ namespace Akka.Actor
             var currentHandler = handlers;
             foreach (var (type, typedHandlers) in handlers.TypedHandlers)
             {
+                // This is covering object types as well. There might be an ordering issue here
+                // but this should probably be resolved with the logic around how handlers are ordered.
                 if (type.IsAssignableFrom(messageType))
                 {
-                    foreach (var subItem in typedHandlers)
-                    {
-                        if (subItem.TryHandle(message))
-                        {
-                            return;
-                        }
-                    }
-                }
-            }
-
-            // Fall back if the type that was passed in the Receive methods is an object the tests were failing due to
-            // missing the handler because it was of type object. This works but as it stands possibly not the best approach
-            if (currentHandler.HandleObject.Count > 0)
-            {
-                foreach (var subItem in currentHandler.HandleObject)
-                {
-                    if (subItem.TryHandle(message))
+                    if (typedHandlers.TryHandle(message))
                     {
                         return;
                     }
@@ -429,32 +440,21 @@ namespace Akka.Actor
             EnsureMayConfigureMessageHandlers();
             var handlers = _handlersStack.Peek();
 
-            if (typeof(T) == typeof(object))
+            if (!handlers.TypedHandlers.TryGetValue(typeof(T), out var typeHandlerInterface))
             {
-                handlers.HandleObject.Add(new TypeHandler<object>
-                {
-                    Predicate = null, 
-                    Handler = o =>
-                    {
-                        handler((T)o);
-                        return true;
-                    }
-                });
-            }
-            
-            if (!handlers.TypedHandlers.TryGetValue(typeof(T), out var handlerList))
-            {
-                handlerList = new List<ITypeHandler>();
-                handlers.TypedHandlers[typeof(T)] = handlerList;
+                typeHandlerInterface = new TypeHandler<T>();
+                handlers.TypedHandlers[typeHandlerInterface.HandlesType] = typeHandlerInterface;
             }
 
-            var typeHandler = new TypeHandler<T>
+            var typedHandler = (TypeHandler<T>)typeHandlerInterface;
+            
+            var predicateHandler = new PredicateHandler<T>()
             {
                 Predicate = shouldHandle,
                 Handler = handler
             };
             
-            handlerList.Add(typeHandler);
+            typedHandler.Handlers.Add(predicateHandler);
         }
 
         private void AddTypedReceiveHandler(Type messageType, Predicate<object> shouldHandle, Func<object, bool> handler)
@@ -462,35 +462,21 @@ namespace Akka.Actor
             EnsureMayConfigureMessageHandlers();
             var handlers = _handlersStack.Peek();
 
-            // When it comes as an object we need to fall back to the more generic object handler. Would be nice to 
-            // be able to start encouraging users to make use of the generic methods
-            if (messageType == typeof(object))
+            if (!handlers.TypedHandlers.TryGetValue(messageType, out var typeHandlerInterface))
             {
-                handlers.HandleObject.Add(new TypeHandler<object>
-                {
-                    Predicate = null, 
-                    Handler = message =>
-                    {
-                        handler(message);
-                        return true;
-                    }
-                });
+                typeHandlerInterface = new TypeHandler<object>();
+                handlers.TypedHandlers[messageType] = typeHandlerInterface;
             }
 
-            if (!handlers.TypedHandlers.TryGetValue(messageType, out var handlerList))
-            {
-                handlerList = new List<ITypeHandler>();
-                handlers.TypedHandlers[messageType] = handlerList;
-            }
-
+            var typedHandler = (TypeHandler<object>)typeHandlerInterface;
             // Have to use object here as dont have the generic type information
-            var typeHandler = new TypeHandler<object>
+            var predicateHandler = new PredicateHandler<object>()
             {
                 Predicate = shouldHandle,
                 Handler = handler
             };
-            
-            handlerList.Add(typeHandler);
+
+            typedHandler.Handlers.Add(predicateHandler);
         }
     }
 }
