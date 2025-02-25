@@ -18,79 +18,11 @@ namespace Akka.Actor
     /// </summary>
     public abstract class ReceiveActor : UntypedActor, IInitializableActor
     {
+        // TODO Verify if this is needed
         private bool _shouldUnhandle = true;
-        private readonly Stack<HandlerSet> _handlersStack = new();
-        private HandlerSet _currentHandlers = null;
+        private readonly Stack<ReceiveActorHandlers> _handlersStack = new();
+        private ReceiveActorHandlers _currentHandlers = null;
         private bool _hasBeenInitialized;
-
-
-        // Internal classes to do the handling. If this approach is used then these can be
-        // Moved out and better tested
-        class HandlerSet
-        {
-            public HandlerSet()
-            {
-                TypedHandlers = new Dictionary<Type, ITypeHandler>();
-                HandleAny = null;
-            }
-
-            public Dictionary<Type, ITypeHandler> TypedHandlers { get; }
-
-            public Action<object> HandleAny { get; set; }
-        }
-
-
-        interface ITypeHandler
-        {
-            Type HandlesType { get; }
-
-            bool TryHandle(object message);
-        }
-
-        // Attempting to make more use of generics to avoid boxing
-        class TypeHandler<T> : ITypeHandler
-        {
-            public TypeHandler()
-            {
-                HandlesType = typeof(T);
-                Handlers = new List<PredicateHandler<T>>();
-            }
-
-            public Type HandlesType { get; }
-
-            public List<PredicateHandler<T>> Handlers { get;}
-
-            public bool TryHandle(object message)
-            {
-                var typedMessage = (T)message;
-                foreach (var predicateHandler in Handlers)
-                {
-                    if (predicateHandler.TryHandle(typedMessage))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-        }
-
-        class PredicateHandler<T>
-        {
-            public Predicate<T> Predicate { get; init; }
-            public Func<T, bool> Handler { get; init; }
-            
-            public bool TryHandle(T typedMessage)
-            {
-                if (Predicate == null || Predicate(typedMessage))
-                {
-                    return Handler(typedMessage);
-                }
-
-                return false;
-            }
-        }
-
 
         /// <summary>
         /// TBD
@@ -121,7 +53,7 @@ namespace Akka.Actor
         /// </summary>
         private void PrepareConfigureMessageHandlers()
         {
-            _handlersStack.Push(new HandlerSet());
+            _handlersStack.Push(new ReceiveActorHandlers());
         }
 
         /// <summary>
@@ -135,7 +67,7 @@ namespace Akka.Actor
             ExecuteMessageHandler(message, _currentHandlers);
         }
 
-        private void ExecuteMessageHandler(object message, HandlerSet handlers)
+        private void ExecuteMessageHandler(object message, ReceiveActorHandlers handlers)
         {
             var messageType = message.GetType();
             var currentHandler = handlers;
@@ -187,7 +119,7 @@ namespace Akka.Actor
             base.BecomeStacked(m => ExecuteMessageHandler(m, newHandlers));
         }
 
-        private HandlerSet CreateNewHandlers(Action configure)
+        private ReceiveActorHandlers CreateNewHandlers(Action configure)
         {
             PrepareConfigureMessageHandlers();
             configure();
@@ -423,14 +355,9 @@ namespace Akka.Actor
         protected void ReceiveAny(Action<object> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
+            var handlerSet = _handlersStack.Peek();
 
-            if (handlers.HandleAny != null)
-            {
-                throw new InvalidOperationException("A handler that catches all messages has been added. No handler can be added after that.");
-            }
-
-            handlers.HandleAny = handler;
+            handlerSet.AddReceiveAnyHandler(handler);
         }
         
         // Separated the handling of the generic and typed handlers because the generics it can be handled
@@ -438,45 +365,17 @@ namespace Akka.Actor
         private void AddGenericReceiveHandler<T>(Predicate<T> shouldHandle, Func<T, bool> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
+            var handlerSet = _handlersStack.Peek();
 
-            if (!handlers.TypedHandlers.TryGetValue(typeof(T), out var typeHandlerInterface))
-            {
-                typeHandlerInterface = new TypeHandler<T>();
-                handlers.TypedHandlers[typeHandlerInterface.HandlesType] = typeHandlerInterface;
-            }
-
-            var typedHandler = (TypeHandler<T>)typeHandlerInterface;
-            
-            var predicateHandler = new PredicateHandler<T>()
-            {
-                Predicate = shouldHandle,
-                Handler = handler
-            };
-            
-            typedHandler.Handlers.Add(predicateHandler);
+            handlerSet.AddGenericReceiveHandler<T>(shouldHandle, handler);
         }
 
         private void AddTypedReceiveHandler(Type messageType, Predicate<object> shouldHandle, Func<object, bool> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            var handlers = _handlersStack.Peek();
+            var handlerSet = _handlersStack.Peek();
 
-            if (!handlers.TypedHandlers.TryGetValue(messageType, out var typeHandlerInterface))
-            {
-                typeHandlerInterface = new TypeHandler<object>();
-                handlers.TypedHandlers[messageType] = typeHandlerInterface;
-            }
-
-            var typedHandler = (TypeHandler<object>)typeHandlerInterface;
-            // Have to use object here as dont have the generic type information
-            var predicateHandler = new PredicateHandler<object>()
-            {
-                Predicate = shouldHandle,
-                Handler = handler
-            };
-
-            typedHandler.Handlers.Add(predicateHandler);
+            handlerSet.AddTypedReceiveHandler(messageType, shouldHandle, handler);
         }
     }
 }
