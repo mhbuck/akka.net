@@ -14,7 +14,9 @@ namespace Akka.Tests.Actor;
 public class ReceiveActorHandlersTests
 {   
     // Tests to do
-    // - Review all tests here as they were AI generated 
+    // - Review all tests here as they were AI generated
+    // - Rename the tests to be more accurate.
+    // - Add tests for the AddGenericReceiveHandler method
     // - Adding for IFoo and then sending a message of Bar : IFoo and it handled
     // - Decide if tests here should cater for adding receive handlers after "built"
     // - See if any of the Test_that_signatures_are_equal and Test_that_signatures_differs tests are applicable
@@ -76,6 +78,24 @@ public class ReceiveActorHandlersTests
 
         handlers.AddReceiveAnyHandler(_ => { });
     }
-    
-    
+
+    [Fact]
+    public void Given_a_TypedReceive_handler_with_no_predicate_has_been_added_When_adding_any_handler_Then_it_succeeds()
+    {
+        var handlers = new ReceiveActorHandlers();
+        handlers.AddTypedReceiveHandler(typeof(object), null, _ => true);
+        
+        // This should throw because the object handler is already added and would catch this before.
+        Assert.Throws<InvalidOperationException>(() => handlers.AddTypedReceiveHandler(typeof(int), _ => true, _ => true));
+    }
+
+    [Fact]
+    public void Given_a_TypedReceive_handler_with_predicate_has_been_added_When_adding_typed_handler_Then_it_succeeds()
+    {
+        var handlers = new ReceiveActorHandlers();
+        handlers.AddTypedReceiveHandler(typeof(object), _ => true, _ => true);
+        
+        // This should be allowed  because the object handler is already but it has a predicate that might not match.
+        handlers.AddTypedReceiveHandler(typeof(int), _ => true, _ => true);
+    }
 }

@@ -76,6 +76,31 @@ internal class ReceiveActorHandlers
 
         HandleAny = handler;
     }
+
+    public bool TryHandle(object message)
+    {
+        var messageType = message.GetType();
+        foreach (var (type, typedHandlers) in TypedHandlers)
+        {
+            // This is covering object types as well. There might be an ordering issue here
+            // but this should probably be resolved with the logic around how handlers are ordered.
+            if (type.IsAssignableFrom(messageType))
+            {
+                if (typedHandlers.TryHandle(message))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (HandleAny != null)
+        {
+            HandleAny(message);
+            return true;
+        }
+
+        return false;
+    }
 }
 
 internal interface ITypeHandler

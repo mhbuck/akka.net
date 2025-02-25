@@ -67,30 +67,12 @@ namespace Akka.Actor
             ExecuteMessageHandler(message, _currentHandlers);
         }
 
-        private void ExecuteMessageHandler(object message, ReceiveActorHandlers handlers)
+        private void ExecuteMessageHandler(object message, ReceiveActorHandlers receiveActorHandlers)
         {
-            var messageType = message.GetType();
-            var currentHandler = handlers;
-            foreach (var (type, typedHandlers) in handlers.TypedHandlers)
-            {
-                // This is covering object types as well. There might be an ordering issue here
-                // but this should probably be resolved with the logic around how handlers are ordered.
-                if (type.IsAssignableFrom(messageType))
-                {
-                    if (typedHandlers.TryHandle(message))
-                    {
-                        return;
-                    }
-                }
-            }
+            var currentHandler = receiveActorHandlers;
+            var wasMessageHandled = currentHandler.TryHandle(message);
 
-            if (currentHandler.HandleAny != null)
-            {
-                currentHandler.HandleAny(message);
-                return;
-            }
-
-            if (_shouldUnhandle)
+            if (!wasMessageHandled && _shouldUnhandle)
             {
                 Unhandled(message);
             }
