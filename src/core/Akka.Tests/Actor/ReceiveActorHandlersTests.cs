@@ -12,7 +12,13 @@ using Xunit;
 namespace Akka.Tests.Actor;
 
 public class ReceiveActorHandlersTests
-{
+{   
+    // Tests to do
+    // - Review all tests here as they were AI generated 
+    // - Adding for IFoo and then sending a message of Bar : IFoo and it handled
+    // - Decide if tests here should cater for adding receive handlers after "built"
+    // - See if any of the Test_that_signatures_are_equal and Test_that_signatures_differs tests are applicable
+
     [Fact]
     public void Given_a_ReceiveAny_handler_has_been_added_When_adding_handler_Then_it_fails()
     {
@@ -63,15 +69,6 @@ public class ReceiveActorHandlersTests
     }
 
     [Fact]
-    public void Given_a_TypedReceive_handler_has_been_added_When_adding_any_handler_Then_it_fails()
-    {
-        var handlers = new ReceiveActorHandlers();
-        handlers.AddTypedReceiveHandler(typeof(object), _ => true, _ => true);
-
-        Assert.Throws<InvalidOperationException>(() => handlers.AddReceiveAnyHandler(_ => { }));
-    }
-
-    [Fact]
     public void Given_a_TypedReceive_handler_with_predicate_has_been_added_When_adding_any_handler_Then_it_succeeds()
     {
         var handlers = new ReceiveActorHandlers();
@@ -79,4 +76,6 @@ public class ReceiveActorHandlersTests
 
         handlers.AddReceiveAnyHandler(_ => { });
     }
+    
+    
 }

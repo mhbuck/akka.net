@@ -24,6 +24,11 @@ internal class ReceiveActorHandlers
 
     public void AddGenericReceiveHandler<T>(Predicate<T>? shouldHandle, Func<T, bool> handler)
     {
+        if (HandleAny != null)
+        {
+            throw new InvalidOperationException("A handler that catches all messages has been added. No handler can be added after that.");
+        }
+        
         if (!TypedHandlers.TryGetValue(typeof(T), out var typeHandlerInterface))
         {
             typeHandlerInterface = new TypeHandler<T>();
@@ -39,6 +44,11 @@ internal class ReceiveActorHandlers
 
     public void AddTypedReceiveHandler(Type messageType, Predicate<object>? shouldHandle, Func<object, bool> handler)
     {
+        if (HandleAny != null)
+        {
+            throw new InvalidOperationException("A handler that catches all messages has been added. No handler can be added after that.");
+        }
+        
         // Need to add cases here if more than one object type is passed in
         // More of the tests from match handler need to be replicated.
 
